@@ -1,4 +1,5 @@
 import z3
+import random
 
 letter_to_index_map = {letter: index for index, letter in enumerate("abcdefghijklmnopqrstuvwxyz")}
 index_to_letter_map = {index: letter for letter, index in letter_to_index_map.items()}
@@ -163,9 +164,16 @@ if __name__ == "__main__":
 
     sorted_words = words.copy()
     sorted_words.sort(reverse=True, key=lambda word: word_to_freq[word])
+    top_words = sorted_words[0:1000] # Only backtest with common words
+    random.shuffle(top_words)
+    top_words = top_words[0:50]
 
+    top_words
 
-    for secret_word in sorted_words:
+    guessed_correctly_num_attempts = []
+    num_cant_guess = 0
+
+    for secret_word in top_words:
         guessed_words = []
 
         attempt = 0
@@ -173,18 +181,23 @@ if __name__ == "__main__":
             attempt += 1
             def add_constraints(solver, letter_vars):
                 for guessed_word in guessed_words:
-                    for letter in guessed_word:
-                        if letter not in secret_word:
+                    for index, letter in enumerate(guessed_word):
+                        letter_is_unique = len([l for l in guessed_word if l == letter]) == 1
+                        all_occurrences_guessed_right = len([1 for gl, sl in zip(guessed_word, secret_word) if gl == sl and gl == letter]) == len([l for l in secret_word if l == letter])
+
+                        if letter == secret_word[index]:
+                            # Include the letter at the exact position
+                            solver = add_exact_letter_position_constraint(solver, letter_vars, letter, index)
+                        elif letter in secret_word:
+                            solver = add_invalid_position_constraint(solver, letter_vars, letter, index)
+                            solver = add_contains_letter_constraint(solver, letter_vars, letter)
+                            if not letter_is_unique and all_occurrences_guessed_right:
+                                # Include the letter at a different location
+                                # NEED MORE TESTING: the letter only occur once, this needs to be extended
+                                solver = add_letter_appears_once_constraint(solver, letter_vars, letter)
+                        else:
                             # Exclude letters that are not present
                             solver = add_doesnt_contain_letter_constraint(solver, letter_vars, letter)
-
-                        if letter in secret_word:
-                            if secret_word.index(letter) == guessed_word.index(letter):
-                                # Include letters that appear once, in a different position
-                                solver = add_letter_appears_once_constraint(solver, letter_vars, letter)
-                            else:
-                                # Include letters that appear once, in a the correct position
-                                solver = add_exact_letter_position_constraint(solver, letter_vars, letter, secret_word.index(letter))
                 return solver
 
             guessed_word = guess_word(words, word_to_freq, letter_to_freq, add_constraints, len(guessed_words) > 0)
@@ -195,3 +208,6 @@ if __name__ == "__main__":
                 print('Incorrect guess {} != {}'.format(guessed_word, secret_word))
             guessed_words.append(guessed_word)
         print('Guessed in {} attempts'.format(attempt))
+        guessed_correctly_num_attempts.append(attempt)
+
+    print('Guessed correctly attempt series: {}, avg: {}'.format(guessed_correctly_num_attempts, sum(guessed_correctly_num_attempts)/len(guessed_correctly_num_attempts)))
