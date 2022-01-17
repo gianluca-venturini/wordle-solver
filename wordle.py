@@ -3,10 +3,11 @@ import z3
 letter_to_index_map = {letter: index for index, letter in enumerate("abcdefghijklmnopqrstuvwxyz")}
 index_to_letter_map = {index: letter for letter, index in letter_to_index_map.items()}
 
-word_length = 5
+WORD_LENGTH = 5
+MAX_ATTEMPTS = 6
 
 def define_letter_variables():
-    return [z3.Int(f"letter_{index}") for index in range(word_length)]
+    return [z3.Int(f"letter_{index}") for index in range(WORD_LENGTH)]
 
 def add_alphabet_modeling_constraints(solver, letter_vars):
     for letter_var in letter_vars:
@@ -14,12 +15,12 @@ def add_alphabet_modeling_constraints(solver, letter_vars):
 
     return solver
 
-def pretty_print_solution(model, letter_vars):
+def get_solution(model, letter_vars):
     word = []
     for index, letter_var in enumerate(letter_vars):
         word.append(index_to_letter_map[model[letter_var].as_long()])
 
-    print(''.join(word))
+    return ''.join(word)
 
 def remove_plurals(words):
     five_letter_words = list(filter(lambda word: len(word) == 5, words))
@@ -47,10 +48,8 @@ def load_dictionary(dictionary_path=None):
 
     all_legal_words_set = set(words)
 
-    print(words)
     sum_frequencies = sum([freq for word, freq in words_and_freq.items() if word in all_legal_words_set])
     word_to_freq = {word: (freq / sum_frequencies) for word, freq in words_and_freq.items() if word in all_legal_words_set}
-    print(word_to_freq)
 
     return words, word_to_freq
 
@@ -140,31 +139,59 @@ def make_normalized_word_frequency_map(words):
     letter_to_freq_normalized = {index_to_letter_map[index]: (freq / sum_freq) for index, freq in enumerate(letter_to_freq)}
     return letter_to_freq_normalized
 
-if __name__ == "__main__":
-    words, word_to_freq = load_dictionary(dictionary_path="./en_50k.txt")
-    letter_to_freq = make_normalized_word_frequency_map(words)
-
-    solver = z3.Optimize()
+def guess_word(words, word_to_freq, letter_to_freq, add_constraints, optimize):
+    solver = z3.Optimize() if optimize else z3.Solver()
     letter_vars = define_letter_variables()
     solver = add_alphabet_modeling_constraints(solver, letter_vars)
     solver = add_legal_words_constraints(solver, words, letter_vars)
-    solver = optimize_search(solver, word_to_freq, letter_to_freq, letter_vars)
+    if optimize:
+        solver = optimize_search(solver, word_to_freq, letter_to_freq, letter_vars)
 
-    # Dynamic part
-    for banned_letter in "badgvfi":
-        solver = add_doesnt_contain_letter_constraint(solver, letter_vars, banned_letter)
-
-    solver = add_letter_appears_once_constraint(solver, letter_vars, "e")
-
-    solver = add_exact_letter_position_constraint(solver, letter_vars, "e", 2)
-    solver = add_exact_letter_position_constraint(solver, letter_vars, "r", 3)
-    solver = add_exact_letter_position_constraint(solver, letter_vars, "y", 4)
-    # End dynamic part
+    solver = add_constraints(solver, letter_vars)
 
     print("Solving...")
     result = solver.check()
     print(result)
-    assert result == z3.sat
+    assert result == z3.sat, solver.assertions()
 
     model = solver.model()
-    pretty_print_solution(model, letter_vars)
+    return get_solution(model, letter_vars)
+
+if __name__ == "__main__":
+    words, word_to_freq = load_dictionary(dictionary_path="./en_10k.txt")
+    letter_to_freq = make_normalized_word_frequency_map(words)
+
+    sorted_words = words.copy()
+    sorted_words.sort(reverse=True, key=lambda word: word_to_freq[word])
+
+
+    for secret_word in sorted_words:
+        guessed_words = []
+
+        attempt = 0
+        while attempt < MAX_ATTEMPTS:
+            attempt += 1
+            def add_constraints(solver, letter_vars):
+                for guessed_word in guessed_words:
+                    for letter in guessed_word:
+                        if letter not in secret_word:
+                            # Exclude letters that are not present
+                            solver = add_doesnt_contain_letter_constraint(solver, letter_vars, letter)
+
+                        if letter in secret_word:
+                            if secret_word.index(letter) == guessed_word.index(letter):
+                                # Include letters that appear once, in a different position
+                                solver = add_letter_appears_once_constraint(solver, letter_vars, letter)
+                            else:
+                                # Include letters that appear once, in a the correct position
+                                solver = add_exact_letter_position_constraint(solver, letter_vars, letter, secret_word.index(letter))
+                return solver
+
+            guessed_word = guess_word(words, word_to_freq, letter_to_freq, add_constraints, len(guessed_words) > 0)
+            if guessed_word == secret_word:
+                print('Guessed correctly {}'.format(guessed_word))
+                break
+            else:
+                print('Incorrect guess {} != {}'.format(guessed_word, secret_word))
+            guessed_words.append(guessed_word)
+        print('Guessed in {} attempts'.format(attempt))
